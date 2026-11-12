@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The Colosseum Game — Zero-Sum Territory Arena</title>
+  <meta
+    name="description"
+    content="Play The Colosseum Game, a two-player zero-sum spatial strategy game on customizable boards from 5x10 up to 50x50 against a friend or the placeholder Random Move AI."
+  />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="top-bar">
+      <div class="brand-group">
+        <h1 class="brand-title" id="page-title">The Colosseum Game</h1>
+        <p class="brand-subtitle">Two-player zero-sum arena division · Move, erect a wall, claim more ground</p>
+      </div>
+
+      <section class="arena-controls" aria-label="Board and Mode Settings">
+        <div class="control-cluster">
+          <label class="control-label" for="input-rows">Board</label>
+          <input
+            id="input-rows"
+            class="dim-input"
+            type="number"
+            min="2"
+            max="50"
+            value="5"
+            aria-label="Board rows (2 to 50)"
+          />
+          <span class="dim-sep">×</span>
+          <input
+            id="input-cols"
+            class="dim-input"
+            type="number"
+            min="2"
+            max="50"
+            value="10"
+            aria-label="Board columns (2 to 50)"
+          />
+          <div class="preset-row">
+            <button type="button" class="btn btn-xs" id="preset-5x10" data-preset="5x10">5×10</button>
+            <button type="button" class="btn btn-xs" id="preset-10x10" data-preset="10x10">10×10</button>
+            <button type="button" class="btn btn-xs" id="preset-20x20" data-preset="20x20">20×20</button>
+            <button type="button" class="btn btn-xs" id="preset-50x50" data-preset="50x50">50×50</button>
+          </div>
+        </div>
+
+        <div class="control-cluster">
+          <label class="control-label" for="select-mode">Opponent</label>
+          <select id="select-mode" class="mode-select">
+            <option value="p1-vs-random" selected>Player 1 vs. Random AI</option>
+            <option value="random-vs-p2">Random AI vs. Player 2</option>
+            <option value="pvp">2 Players (Local)</option>
+            <option value="random-vs-random">Random AI vs. Random AI</option>
+            <option value="custom-vs-random">Custom AI (ai.py) vs. Random AI</option>
+          </select>
+        </div>
+
+        <button type="button" class="btn btn-primary" id="btn-new-game">New Arena</button>
+      </section>
+    </header>
+
+    <main class="workspace-grid">
+      <section class="arena-column" aria-label="Colosseum Arena">
+        <!-- Player Status & Turn HUD -->
+        <div class="hud-strip">
+          <div class="player-badge p1" id="badge-p1">
+            <span class="pawn-swatch p1" aria-hidden="true"></span>
+            <div class="player-meta">
+              <span class="player-name" id="name-p1">Gladiator I (You)</span>
+              <span class="player-stat" id="stat-p1">Pos (R3, C1)</span>
+            </div>
+          </div>
+
+          <div class="turn-center">
+            <div class="turn-pill" id="turn-pill">Turn 1 · Gladiator I</div>
+            <div class="step-prompt" id="step-prompt">
+              Step 1 of 3: Click a highlighted square (or your gladiator to stay)
+            </div>
+          </div>
+
+          <div class="player-badge p2" id="badge-p2">
+            <div class="player-meta">
+              <span class="player-name" id="name-p2">Random AI (Python)</span>
+              <span class="player-stat" id="stat-p2">Pos (R3, C10)</span>
+            </div>
+            <span class="pawn-swatch p2" aria-hidden="true"></span>
+          </div>
+        </div>
+
+        <!-- Mandatory Pre-Move Confirmation Bar (Zero Undo) -->
+        <div class="confirm-bar" id="confirm-bar" role="region" aria-label="Move Confirmation">
+          <div class="confirm-summary">
+            <span class="confirm-title" id="confirm-title">Select Destination Square</span>
+            <span class="confirm-detail" id="confirm-detail">
+              Click Up, Down, Left, Right, or your own square on the board. Every move requires a wall and confirmation.
+            </span>
+          </div>
+          <div class="confirm-actions">
+            <button type="button" class="btn" id="btn-clear-draft" disabled>Re-select</button>
+            <button type="button" class="btn btn-confirm" id="btn-confirm-move" disabled>
+              Confirm &amp; Lock Move
+            </button>
+          </div>
+        </div>
+
+        <!-- Interactive Canvas Stage -->
+        <div class="board-stage">
+          <div class="camera-bar">
+            <span>Click board to choose square &amp; wall · Scroll to zoom, drag to pan when zoomed</span>
+            <div class="camera-controls">
+              <button type="button" class="btn btn-xs" id="btn-zoom-out" aria-label="Zoom out">−</button>
+              <span class="zoom-readout" id="zoom-readout">100%</span>
+              <button type="button" class="btn btn-xs" id="btn-zoom-in" aria-label="Zoom in">+</button>
+              <button type="button" class="btn btn-xs" id="btn-fit-board">Fit Arena</button>
+              <button type="button" class="btn btn-xs" id="btn-focus-turn">Focus Active</button>
+            </div>
+          </div>
+          <div class="canvas-wrap" id="canvas-wrap">
+            <canvas id="arena-canvas"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-column">
+        <section class="side-panel">
+          <h2 class="panel-heading">Laws of the Colosseum</h2>
+          <ol class="rules-list">
+            <li>
+              <strong>Opposite Starts:</strong> Two gladiators begin on opposite ends of the arena (default
+              <strong>5 × 10</strong>, adjustable up to <strong>50 × 50</strong>).
+            </li>
+            <li>
+              <strong>Step or Hold:</strong> Each turn, click the board to move <strong>Up, Down, Left, Right, or Stay</strong>. You cannot step onto the other player's square or cross walls.
+            </li>
+            <li>
+              <strong>Mandatory Wall:</strong> After choosing your square, click one of its open borders to erect a permanent wall. A wall <strong>must</strong> be placed every turn.
+            </li>
+            <li>
+              <strong>Confirm — No Undo:</strong> Review your previewed move &amp; wall on the board, then click <strong>Confirm &amp; Lock Move</strong>. Confirmed moves are irreversible.
+            </li>
+            <li>
+              <strong>Victory by Division:</strong> The instant walls completely separate the two gladiators, the game ends and the side with strictly <strong>more reachable squares</strong> wins.
+            </li>
+          </ol>
+          <div class="ai-note">
+            <strong>Python AI Connected (<code>ai.py</code>):</strong> Placeholder <code>random_move_ai</code> runs in Python via <code>server.py</code>. Edit <code>custom_ai</code> in <code>ai.py</code> later—changes hot-reload automatically!
+          </div>
+        </section>
+
+        <section class="side-panel">
+          <h2 class="panel-heading">Arena Chronicle (Permanent)</h2>
+          <ul class="log-list" id="move-log">
+            <li class="log-empty">No moves committed yet.</li>
+          </ul>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
