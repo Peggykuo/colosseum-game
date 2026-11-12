@@ -4,8 +4,10 @@
  * Supports:
  * - Direct click-on-board move + mandatory wall selection
  * - Mandatory pre-move confirmation with strictly no undo
- * - Live Python AI backend (`POST /api/ai-move` -> `ai.py`), 2-Player Local,
- *   Random AI vs. Random AI, and Custom AI (`ai.py`) vs. Random AI modes
+ * - Dual Python AI runtime:
+ *   1. Local `server.py` (`POST ./api/ai-move` -> `ai.py` with live hot-reload)
+ *   2. Automatic Pyodide WebAssembly Worker fallback (`./pyodide-worker.js`)
+ *      running `engine.py` + `ai.py` directly in the browser on GitHub Pages
  */
 (function () {
   'use strict';
@@ -43,6 +45,15 @@
   let aiBusy = false;
   let aiError = null;
   let aiPreview = null; // Brief visual preview of Python AI's chosen { row, col, moveDir, wallDir }
+
+  // Python runtime state: 'probing' | 'server' | 'pyodide'
+  let aiBackendMode = 'probing';
+  let backendProbePromise = null;
+  let pyodideWorker = null;
+  let pyodideReady = false;
+  let pyodideInitPromise = null;
+  let workerReqSeq = 0;
+  const pendingWorkerReqs = new Map();
 
   // Pre-confirmation draft state for human turns (no undo after confirmation)
   let draftMove = null;
@@ -105,6 +116,7 @@
   const zoomReadout = document.getElementById('zoom-readout');
 
   const logList = document.getElementById('move-log');
+  const aiRuntimeNote = document.getElementById('ai-runtime-note');
 
   function getControllerType(playerIdx) {
     const pair = MODE_CONTROLLERS[gameMode] || MODE_CONTROLLERS.pvp;
@@ -269,12 +281,20 @@
           confirmTitle.textContent = `Python AI Exception (${activeName})`;
           confirmDetail.textContent = aiError;
         } else {
+          const loadingPyodide = aiBackendMode === 'pyodide' && !pyodideReady;
           stepPrompt.textContent = aiPreview
             ? `${activeName}: ${DIR_LABELS[aiPreview.moveDir]} → ${formatCoord(aiPreview.row, aiPreview.col)} + ${WALL_LABELS[aiPreview.wallDir]}`
-            : `${activeName} is computing move in Python (ai.py)...`;
+            : loadingPyodide
+              ? 'Loading Python 3 WebAssembly runtime (Pyodide) for first AI turn...'
+              : `${activeName} is computing move in Python (ai.py)...`;
           confirmBar.classList.remove('ready');
           confirmTitle.textContent = `${activeName} Turn (Python)`;
-          confirmDetail.textContent = 'Requesting move from Python server (/api/ai-move → ai.py).';
+          confirmDetail.textContent =
+            aiBackendMode === 'pyodide'
+              ? loadingPyodide
+                ? 'Booting in-browser Python 3 WebAssembly worker (./pyodide-worker.js → engine.py + ai.py)...'
+                : 'Executing ai.py directly in your browser via Pyodide WebAssembly Worker.'
+              : 'Requesting move from local Python server (./api/ai-move → ai.py).';
         }
         clearDraftBtn.disabled = true;
         confirmMoveBtn.disabled = true;
@@ -305,7 +325,20 @@
       }
     }
 
+    syncRuntimeNote();
     renderMoveLog();
+  }
+
+  function syncRuntimeNote() {
+    if (!aiRuntimeNote) return;
+    if (aiBackendMode === 'server') {
+      aiRuntimeNote.innerHTML =
+        '<strong>Python AI Connected (<code>ai.py</code>):</strong> Running via local <code>server.py</code>. Edit <code>custom_ai</code> in <code>ai.py</code>—changes hot-reload automatically!';
+    } else if (aiBackendMode === 'pyodide') {
+      aiRuntimeNote.innerHTML = pyodideReady
+        ? '<strong>Python AI Ready (Pyodide WASM):</strong> Running <code>engine.py</code> &amp; <code>ai.py</code> directly in your browser via WebAssembly—no backend server required.'
+        : '<strong>Python AI (Static / GitHub Pages Mode):</strong> Loading Pyodide WebAssembly Worker to run <code>engine.py</code> &amp; <code>ai.py</code> in your browser...';
+    }
   }
 
   function renderMoveLog() {
@@ -466,28 +499,142 @@
     maybeTriggerAITurn(sessionId);
   }
 
-  async function requestPythonAIMove(state, agentType) {
-    const response = await fetch('/api/ai-move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        agentType,
-        state: {
-          rows: state.rows,
-          cols: state.cols,
-          walls: Array.from(state.walls),
-          players: state.players,
-          currentPlayer: state.currentPlayer,
-          turnNumber: state.turnNumber,
-        },
-      }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || `Python AI server returned HTTP ${response.status}`);
+  function sendWorkerMessage(type, payload) {
+    if (!pyodideWorker) {
+      pyodideWorker = new Worker('./pyodide-worker.js');
+      pyodideWorker.onmessage = (event) => {
+        const msg = event.data || {};
+        const pending = pendingWorkerReqs.get(msg.id);
+        if (!pending) return;
+        pendingWorkerReqs.delete(msg.id);
+        if (msg.ok) {
+          pending.resolve(msg);
+        } else {
+          pending.reject(new Error(msg.error || 'Pyodide worker error'));
+        }
+      };
+      pyodideWorker.onerror = (err) => {
+        const message =
+          (err && err.message) || 'Failed to load Pyodide WebAssembly worker (./pyodide-worker.js).';
+        pendingWorkerReqs.forEach((p) => p.reject(new Error(message)));
+        pendingWorkerReqs.clear();
+      };
     }
-    return data.action;
+
+    const id = ++workerReqSeq;
+    return new Promise((resolve, reject) => {
+      pendingWorkerReqs.set(id, { resolve, reject });
+      pyodideWorker.postMessage({ id, type, payload });
+    });
+  }
+
+  function ensurePyodideWorkerReady() {
+    if (!pyodideInitPromise) {
+      pyodideInitPromise = sendWorkerMessage('init', null)
+        .then(() => {
+          pyodideReady = true;
+          syncUI();
+        })
+        .catch((err) => {
+          pyodideInitPromise = null;
+          throw err;
+        });
+    }
+    return pyodideInitPromise;
+  }
+
+  function enablePyodideFallback() {
+    if (aiBackendMode !== 'pyodide') {
+      aiBackendMode = 'pyodide';
+      syncUI();
+    }
+    // Pre-warm Python 3 WebAssembly in the background so it is ready when AI moves
+    ensurePyodideWorkerReady().catch(() => {
+      // Any initialization failure will surface cleanly if/when an AI turn runs
+    });
+  }
+
+  function probeBackendRuntime() {
+    if (!backendProbePromise) {
+      backendProbePromise = (async () => {
+        try {
+          const res = await fetch('./api/health', { method: 'GET', cache: 'no-store' });
+          const contentType = res.headers.get('content-type') || '';
+          if (res.ok && contentType.includes('application/json')) {
+            const data = await res.json();
+            if (data && data.status === 'ok') {
+              aiBackendMode = 'server';
+              syncUI();
+              return 'server';
+            }
+          }
+        } catch (_) {
+          // Static host or offline server -> switch to Pyodide Web Worker
+        }
+        enablePyodideFallback();
+        return 'pyodide';
+      })();
+    }
+    return backendProbePromise;
+  }
+
+  async function requestPyodideAIMove(payload) {
+    await ensurePyodideWorkerReady();
+    const res = await sendWorkerMessage('ai-move', payload);
+    return res.data.action;
+  }
+
+  async function requestPythonAIMove(state, agentType) {
+    const payload = {
+      agentType,
+      state: {
+        rows: state.rows,
+        cols: state.cols,
+        walls: Array.from(state.walls),
+        players: state.players,
+        currentPlayer: state.currentPlayer,
+        turnNumber: state.turnNumber,
+      },
+    };
+
+    if (aiBackendMode === 'probing') {
+      await probeBackendRuntime();
+    }
+
+    if (aiBackendMode === 'server') {
+      let response;
+      try {
+        response = await fetch('./api/ai-move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      } catch (_) {
+        // Local server stopped or unreachable -> fall back to in-browser Pyodide
+        enablePyodideFallback();
+        return requestPyodideAIMove(payload);
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      if (
+        response.status === 404 ||
+        response.status === 405 ||
+        response.status === 501 ||
+        !contentType.includes('application/json')
+      ) {
+        // Hosted statically (e.g. GitHub Pages) -> fall back to in-browser Pyodide
+        enablePyodideFallback();
+        return requestPyodideAIMove(payload);
+      }
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `Python AI server returned HTTP ${response.status}`);
+      }
+      return data.action;
+    }
+
+    return requestPyodideAIMove(payload);
   }
 
   async function maybeTriggerAITurn(activeSession) {
@@ -1008,6 +1155,7 @@
     draw();
   });
 
-  // Boot default 5x10 game vs. Placeholder Random Move AI
+  // Probe local Python server (`./api/health`) vs. static GitHub Pages Pyodide mode, then boot 5x10 arena
+  probeBackendRuntime();
   startNewGame(Engine.DEFAULT_ROWS, Engine.DEFAULT_COLS);
 })();

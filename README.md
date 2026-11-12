@@ -24,7 +24,7 @@ A two-player zero-sum territory strategy game featuring an interactive HTML5 `<c
   - Each player's score is the total number of squares reachable from their position without crossing walls (their enclosed territory).
   - The player with strictly **more space** on their side wins; equal territory counts result in a draw.
 
-## Running Locally
+## Running Locally (Hot-Reload Python Server)
 
 Requires Python 3.8+ (uses standard library only—no external packages needed):
 
@@ -32,17 +32,31 @@ Requires Python 3.8+ (uses standard library only—no external packages needed):
 python3 server.py
 ```
 
-Open `http://localhost:8000` in your browser (or set `PORT=3000 python3 server.py` for a custom port).
+Open `http://localhost:8000` in your browser (or set `PORT=3000 python3 server.py` for a custom port). When running via `server.py`, edits to `ai.py` hot-reload automatically on every move.
+
+## Hosting on GitHub Pages (Zero Backend Required)
+
+This repository works directly on **GitHub Pages** out of the box—while still running your real Python `engine.py` and `ai.py` code:
+
+1. Push this repository to GitHub (branch `main`).
+2. In your GitHub repository, open **Settings → Pages**.
+3. Under **Build and deployment**, set **Source** to **Deploy from a branch**, select **`main`** and **`/ (root)`**, and click **Save**.
+
+When hosted statically on GitHub Pages (where `server.py` is not running), `app.js` automatically detects static mode and boots **`pyodide-worker.js`** (Python 3 compiled to WebAssembly in a background Web Worker), loading `engine.py` and `ai.py` directly in the browser.
 
 ## Building Your Own Python AI
 
-Edit `custom_ai(state)` in `ai.py`. `server.py` automatically hot-reloads `ai.py` whenever it changes on disk, so you can test new heuristics or search algorithms live without restarting the server.
+Edit `custom_ai(state)` in `ai.py`:
+- **Locally (`python3 server.py`):** `server.py` hot-reloads `ai.py` whenever it changes on disk, so you can test new heuristics or search algorithms live without restarting.
+- **On GitHub Pages:** Any committed updates to `ai.py` (including pure-Python packages or Pyodide-supported packages like `numpy`) are automatically fetched and executed in the browser Web Worker.
 
 ## Project Structure
 
 - `index.html` / `styles.css` — Layout and travertine-inspired UI styling
-- `app.js` — Interactive HiDPI `<canvas>` board, pan/zoom camera, and pre-move confirmation workflow
+- `app.js` — Interactive HiDPI `<canvas>` board, pan/zoom camera, pre-move confirmation workflow, and Python runtime switcher
 - `engine.js` — Client-side bitmask wall grid and BFS separation/territory logic
-- `engine.py` — Pure Python `GameState` and `Action` engine for AI search and server validation
+- `engine.py` — Pure Python `GameState` and `Action` engine for AI search and validation
 - `ai.py` — Placeholder `random_move_ai` and `custom_ai` entry point
-- `server.py` — Lightweight Python HTTP server and `/api/ai-move` JSON endpoint
+- `server.py` — Local Python HTTP server with `ai.py` hot-reloading (`/api/ai-move`)
+- `pyodide-worker.js` — In-browser Python WebAssembly worker fallback for static GitHub Pages hosting
+- `.nojekyll` — Ensures GitHub Pages serves all static files without Jekyll filtering
