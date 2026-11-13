@@ -2,6 +2,8 @@
 
 > **Note:** Reupload from a Nov 2023 project to code an AI agent for a zer-sum game. The game and UI is completed AI generated to showcase the AI agent.
 
+Try the game at https://peggykuo.github.io/colosseum-game/
+
 A two-player zero-sum territory strategy game with an HTML5 `<canvas>` UI and Python AI backend.
 
 ## Rules
