@@ -1,6 +1,6 @@
 # Colosseum Game
 
-> **Note:** Reupload from a Nov 2023 project to code an AI agent for a zer-sum game. The game and UI is completed AI generated to showcase the AI agent.
+> **Note:** Reupload from a Nov 2023 project to code an AI agent for a zero-sum game. The game and UI is completed AI generated to showcase the AI agent.
 
 Try the game at https://peggykuo.github.io/colosseum-game/
 
