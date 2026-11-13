@@ -2,8 +2,8 @@
 The Colosseum Game — Python HTTP & AI Server (`server.py`)
 
 Serves the interactive web UI and executes Python AI moves via `POST /api/ai-move`.
-Automatically hot-reloads `ai.py` whenever it is modified on disk so you can iterate
-on your Python AI live without restarting the server.
+Automatically hot-reloads `agents/student_agent.py`, `agents/random_agent.py`, and `ai.py`
+whenever modified on disk so you can iterate live without restarting the server.
 """
 
 from __future__ import annotations
@@ -21,23 +21,40 @@ BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+from utils import ensure_numpy  # noqa: E402
+
+ensure_numpy()
+
+import agents.random_agent  # noqa: E402
+import agents.student_agent  # noqa: E402
 import ai  # noqa: E402
 from engine import Action, GameState  # noqa: E402
 
-AI_FILE = BASE_DIR / "ai.py"
-_last_ai_mtime: float = AI_FILE.stat().st_mtime if AI_FILE.exists() else 0.0
+WATCHED_FILES = [
+    (BASE_DIR / "agents" / "random_agent.py", agents.random_agent),
+    (BASE_DIR / "agents" / "student_agent.py", agents.student_agent),
+    (BASE_DIR / "ai.py", ai),
+]
+_last_mtimes = {
+    path: (path.stat().st_mtime if path.exists() else 0.0)
+    for path, _ in WATCHED_FILES
+}
 
 
 def get_fresh_ai_module():
-    """Hot-reloads `ai.py` if its file modification timestamp changed."""
-    global _last_ai_mtime
-    try:
-        mtime = AI_FILE.stat().st_mtime
-        if mtime != _last_ai_mtime:
-            importlib.reload(ai)
-            _last_ai_mtime = mtime
-    except OSError:
-        pass
+    """Hot-reloads agent modules and `ai.py` if any file modification timestamp changed."""
+    reloaded = False
+    for path, mod in WATCHED_FILES:
+        try:
+            mtime = path.stat().st_mtime
+            if mtime != _last_mtimes.get(path):
+                importlib.reload(mod)
+                _last_mtimes[path] = mtime
+                reloaded = True
+        except OSError:
+            pass
+    if reloaded:
+        importlib.reload(ai)
     return ai
 
 
@@ -46,7 +63,6 @@ class ColosseumRequestHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(BASE_DIR), **kwargs)
 
     def log_message(self, format: str, *args) -> None:
-        # Keep logs concise
         sys.stdout.write("[Colosseum] " + (format % args) + "\n")
         sys.stdout.flush()
 
@@ -63,7 +79,7 @@ class ColosseumRequestHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/health":
             self._send_json(
                 HTTPStatus.OK,
-                {"status": "ok", "aiFile": str(AI_FILE.name)},
+                {"status": "ok", "aiFile": "agents/student_agent.py"},
             )
             return
         super().do_GET()
@@ -87,7 +103,6 @@ class ColosseumRequestHandler(SimpleHTTPRequestHandler):
             ai_mod = get_fresh_ai_module()
             chosen = ai_mod.choose_move(state.clone(), agent_type=agent_type)
 
-            # Accept either an `Action` instance or a dict/tuple from user's future custom AI
             if isinstance(chosen, dict):
                 chosen = Action(
                     row=int(chosen["row"]),

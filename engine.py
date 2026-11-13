@@ -1,9 +1,8 @@
 """
-The Colosseum Game — Pure Python Rules & State Engine (`engine.py`)
+The Colosseum Game — State Adapter & Engine (`engine.py`)
 
-Designed for both serving the interactive UI backend and running fast
-Python AI search algorithms (Minimax, Alpha-Beta, Monte Carlo Tree Search)
-on board sizes from 2x2 up to 50x50 (default 5x10).
+Bridges the interactive HTML5 `<canvas>` UI state representation with the
+`World` backbone in `world.py` and the agent interface in `agents/`.
 """
 
 from __future__ import annotations
@@ -11,6 +10,19 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
+
+from utils import ensure_numpy
+
+ensure_numpy()
+
+import numpy as np
+from constants import (
+    DIRECTION_DOWN,
+    DIRECTION_LEFT,
+    DIRECTION_RIGHT,
+    DIRECTION_UP,
+)
+from world import World
 
 MIN_SIZE = 2
 MAX_SIZE = 50
@@ -22,6 +34,20 @@ WALL_BITS: Dict[str, int] = {
     "E": 2,
     "S": 4,
     "W": 8,
+}
+
+WALL_TO_DIR: Dict[str, int] = {
+    "N": DIRECTION_UP,
+    "E": DIRECTION_RIGHT,
+    "S": DIRECTION_DOWN,
+    "W": DIRECTION_LEFT,
+}
+
+DIR_TO_WALL: Dict[int, str] = {
+    DIRECTION_UP: "N",
+    DIRECTION_RIGHT: "E",
+    DIRECTION_DOWN: "S",
+    DIRECTION_LEFT: "W",
 }
 
 WALL_DIRS: Tuple[str, ...] = ("N", "E", "S", "W")
@@ -82,7 +108,7 @@ def get_initial_positions(rows: int, cols: int) -> List[Tuple[int, int]]:
 
 class GameState:
     """
-    Mutable game state with fast `.clone()` and `.simulate_action()` helpers for AI search.
+    Wraps the `World` backbone (`world.py`) and exposes helpers for the UI server and Pyodide worker.
     """
 
     __slots__ = (
@@ -92,6 +118,7 @@ class GameState:
         "players",
         "current_player",
         "turn_number",
+        "max_step",
         "game_over",
         "winner",
         "scores",
@@ -106,6 +133,7 @@ class GameState:
         players: Optional[List[Tuple[int, int]]] = None,
         current_player: int = 0,
         turn_number: int = 1,
+        max_step: int = 1,
         skip_eval: bool = False,
     ) -> None:
         self.rows: int = clamp_board_size(rows, DEFAULT_ROWS)
@@ -117,16 +145,61 @@ class GameState:
         )
         self.current_player: int = int(current_player)
         self.turn_number: int = int(turn_number)
+        self.max_step: int = int(max_step)
         self.game_over: bool = False
-        self.winner: Optional[int] = None  # 0 = P1, 1 = P2, -1 = Draw, None = Ongoing
+        self.winner: Optional[int] = None
         self.scores: Tuple[int, int] = (total, total)
         self.neutral_count: int = 0
 
         if not skip_eval:
             self.update_territory_info()
 
+    def to_chess_board(self):
+        """
+        Converts `(rows, cols, walls)` into the `(rows, cols, 4)` boolean `chess_board`
+        used by `world.py` and `agents/` (`[Up, Right, Down, Left]`).
+        """
+        chess_board = np.zeros((self.rows, self.cols, 4), dtype=bool)
+        chess_board[0, :, 0] = True
+        chess_board[:, 0, 3] = True
+        chess_board[-1, :, 2] = True
+        chess_board[:, -1, 1] = True
+
+        for r in range(self.rows):
+            row_offset = r * self.cols
+            for c in range(self.cols):
+                w = self.walls[row_offset + c]
+                if w:
+                    if w & 1:
+                        chess_board[r, c, 0] = True
+                    if w & 2:
+                        chess_board[r, c, 1] = True
+                    if w & 4:
+                        chess_board[r, c, 2] = True
+                    if w & 8:
+                        chess_board[r, c, 3] = True
+        return chess_board
+
+    def to_world(self) -> World:
+        """Creates a `World` instance synchronized with this `GameState`."""
+        world = World.__new__(World)
+        world.moves = ((-1, 0), (0, 1), (1, 0), (0, -1))
+        world.opposites = {0: 2, 1: 3, 2: 0, 3: 1}
+        world.player_names = {0: "A", 1: "B"}
+        world.dir_names = {0: "Up", 1: "Right", 2: "Down", 3: "Left"}
+        world.board_size = self.rows
+        world.chess_board = self.to_chess_board()
+        world.p0_pos = np.asarray(self.players[0], dtype=int)
+        world.p1_pos = np.asarray(self.players[1], dtype=int)
+        world.turn = self.current_player
+        world.max_step = self.max_step
+        world.p0_time = []
+        world.p1_time = []
+        world.results_cache = ()
+        world.display_ui = False
+        return world
+
     def clone(self) -> GameState:
-        """Fast deep copy suitable for tight MCTS / Minimax loops."""
         copy = GameState(
             rows=self.rows,
             cols=self.cols,
@@ -134,6 +207,7 @@ class GameState:
             players=[self.players[0], self.players[1]],
             current_player=self.current_player,
             turn_number=self.turn_number,
+            max_step=self.max_step,
             skip_eval=True,
         )
         copy.game_over = self.game_over
@@ -146,7 +220,6 @@ class GameState:
         return 0 <= row < self.rows and 0 <= col < self.cols
 
     def is_edge_blocked(self, row: int, col: int, wall_dir: str) -> bool:
-        """Returns True if `wall_dir` from `(row, col)` is an outer arena boundary or has a wall."""
         if wall_dir == "N" and row == 0:
             return True
         if wall_dir == "S" and row == self.rows - 1:
@@ -168,10 +241,6 @@ class GameState:
     def get_legal_destinations(
         self, player_idx: Optional[int] = None
     ) -> List[Tuple[int, int, str]]:
-        """
-        Returns legal `(row, col, move_dir)` moves (STAY, N, E, S, W) for `player_idx`.
-        Players cannot cross walls/boundaries or step onto the opponent's square.
-        """
         if self.game_over:
             return []
         p_idx = self.current_player if player_idx is None else player_idx
@@ -190,13 +259,11 @@ class GameState:
         return destinations
 
     def get_legal_walls_at(self, row: int, col: int) -> List[str]:
-        """Returns open interior wall directions ('N', 'E', 'S', 'W') on `(row, col)`."""
         if self.game_over or not self.in_bounds(row, col):
             return []
         return [d for d in WALL_DIRS if not self.is_edge_blocked(row, col, d)]
 
     def get_legal_actions(self, player_idx: Optional[int] = None) -> List[Action]:
-        """Enumerates every legal `Action(row, col, wall_dir, move_dir)` for `player_idx`."""
         if self.game_over:
             return []
         actions: List[Action] = []
@@ -216,13 +283,16 @@ class GameState:
     def is_valid_action(self, action: Action, player_idx: Optional[int] = None) -> bool:
         if self.game_over or action.wall_dir not in WALL_BITS:
             return False
-        legal_dests = self.get_legal_destinations(player_idx)
-        if not any(r == action.row and c == action.col for r, c, _ in legal_dests):
+        world = self.to_world()
+        p_idx = self.current_player if player_idx is None else player_idx
+        world.turn = p_idx
+        start_pos = self.players[p_idx]
+        end_pos = (action.row, action.col)
+        if not world.check_boundary(end_pos):
             return False
-        return not self.is_edge_blocked(action.row, action.col, action.wall_dir)
+        return world.check_valid_step(start_pos, end_pos, WALL_TO_DIR[action.wall_dir])
 
     def compute_reachable_cells(self, start_row: int, start_col: int) -> Tuple[int, bytearray]:
-        """Fast BFS returning `(reachable_count, visited_mask)`."""
         rows, cols, walls = self.rows, self.cols, self.walls
         visited = bytearray(rows * cols)
         start_idx = start_row * cols + start_col
@@ -263,35 +333,30 @@ class GameState:
         return count, visited
 
     def update_territory_info(self) -> None:
-        """Checks whether walls separate the two players and updates scores & winner."""
+        """Evaluates game end and territory counts via `World.check_endgame()`."""
         total = self.rows * self.cols
-        p1_r, p1_c = self.players[0]
-        p2_r, p2_c = self.players[1]
+        world = self.to_world()
+        is_endgame, p0_score, p1_score = world.check_endgame()
 
-        p1_count, p1_vis = self.compute_reachable_cells(p1_r, p1_c)
-        separated = p1_vis[p2_r * self.cols + p2_c] == 0
-
-        if not separated:
-            self.scores = (p1_count, p1_count)
-            self.neutral_count = total - p1_count
+        if not is_endgame:
+            self.scores = (p0_score, p1_score)
+            self.neutral_count = total - p0_score
             self.game_over = False
             self.winner = None
             return
 
-        p2_count, _ = self.compute_reachable_cells(p2_r, p2_c)
-        self.scores = (p1_count, p2_count)
-        self.neutral_count = total - p1_count - p2_count
+        self.scores = (p0_score, p1_score)
+        self.neutral_count = total - p0_score - p1_score
         self.game_over = True
 
-        if p1_count > p2_count:
+        if p0_score > p1_score:
             self.winner = 0
-        elif p2_count > p1_count:
+        elif p1_score > p0_score:
             self.winner = 1
         else:
             self.winner = -1
 
     def apply_action(self, action: Action) -> GameState:
-        """Mutates `self` by applying `action`, checking separation, and advancing the turn."""
         if not self.is_valid_action(action, self.current_player):
             raise ValueError(f"Illegal Colosseum action: {action}")
 
@@ -306,7 +371,6 @@ class GameState:
         return self
 
     def simulate_action(self, action: Action) -> GameState:
-        """Non-mutating helper: clones `self` and applies `action`."""
         return self.clone().apply_action(action)
 
     @classmethod
@@ -333,6 +397,7 @@ class GameState:
             players=players,
             current_player=int(data.get("currentPlayer", 0)),
             turn_number=int(data.get("turnNumber", 1)),
+            max_step=int(data.get("maxStep", 1)),
         )
 
     def to_dict(self) -> dict:

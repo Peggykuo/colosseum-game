@@ -31,7 +31,9 @@
 
   // Mode controller descriptors: 'human' | 'random' | 'custom'
   const MODE_CONTROLLERS = {
+    'p1-vs-custom': ['human', 'custom'],
     'p1-vs-random': ['human', 'random'],
+    'custom-vs-p2': ['custom', 'human'],
     'random-vs-p2': ['random', 'human'],
     pvp: ['human', 'human'],
     'random-vs-random': ['random', 'random'],
@@ -40,7 +42,7 @@
 
   // Application State
   let gameState = Engine.createGameState(Engine.DEFAULT_ROWS, Engine.DEFAULT_COLS);
-  let gameMode = 'p1-vs-random';
+  let gameMode = 'p1-vs-custom';
   let sessionId = 0; // Cancels in-flight AI requests on New Arena / Mode change
   let aiBusy = false;
   let aiError = null;

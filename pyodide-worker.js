@@ -2,7 +2,8 @@
  * The Colosseum Game — Pyodide (Python-in-WebAssembly) Web Worker
  *
  * Enables 100% static hosting (e.g. GitHub Pages) while executing the exact
- * same `engine.py` and `ai.py` Python codebase directly inside the browser.
+ * same `world.py`, `agents/` (`student_agent.py`, `random_agent.py`), `engine.py`,
+ * and `ai.py` Python codebase directly inside the browser.
  */
 /* global importScripts */
 'use strict';
@@ -11,6 +12,20 @@ const PYODIDE_BASE = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/';
 
 let initPromise = null;
 let runPythonAICallable = null;
+
+const PYTHON_FILES = [
+  'constants.py',
+  'store.py',
+  'utils.py',
+  'world.py',
+  'agents/__init__.py',
+  'agents/agent.py',
+  'agents/random_agent.py',
+  'agents/human_agent.py',
+  'agents/student_agent.py',
+  'engine.py',
+  'ai.py',
+];
 
 const PYTHON_BOOTSTRAP = `
 import json
@@ -81,18 +96,22 @@ function ensurePyodideReady() {
         importScripts(PYODIDE_BASE + 'pyodide.js');
       }
 
-      const [pyodide, engineCode, aiCode] = await Promise.all([
+      const [pyodide, ...sources] = await Promise.all([
         self.loadPyodide({ indexURL: PYODIDE_BASE }),
-        fetchPythonSource('./engine.py'),
-        fetchPythonSource('./ai.py'),
+        ...PYTHON_FILES.map((relPath) => fetchPythonSource('./' + relPath)),
       ]);
 
-      pyodide.FS.writeFile('engine.py', engineCode, { encoding: 'utf8' });
-      pyodide.FS.writeFile('ai.py', aiCode, { encoding: 'utf8' });
+      try {
+        pyodide.FS.mkdir('agents');
+      } catch (_) {
+        // Directory already exists
+      }
 
-      // Automatically load pure-Python / WASM wheels if the user imports packages (e.g. numpy) in ai.py
-      await pyodide.loadPackagesFromImports(aiCode);
+      for (let i = 0; i < PYTHON_FILES.length; i++) {
+        pyodide.FS.writeFile(PYTHON_FILES[i], sources[i], { encoding: 'utf8' });
+      }
 
+      await pyodide.loadPackage('numpy');
       await pyodide.runPythonAsync(PYTHON_BOOTSTRAP);
       runPythonAICallable = pyodide.globals.get('_colosseum_choose_move');
       return pyodide;
