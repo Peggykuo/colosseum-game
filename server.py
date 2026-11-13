@@ -25,13 +25,11 @@ from utils import ensure_numpy  # noqa: E402
 
 ensure_numpy()
 
-import agents.random_agent  # noqa: E402
 import agents.student_agent  # noqa: E402
 import ai  # noqa: E402
 from engine import Action, GameState  # noqa: E402
 
 WATCHED_FILES = [
-    (BASE_DIR / "agents" / "random_agent.py", agents.random_agent),
     (BASE_DIR / "agents" / "student_agent.py", agents.student_agent),
     (BASE_DIR / "ai.py", ai),
 ]
@@ -99,7 +97,7 @@ class ColosseumRequestHandler(SimpleHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Game is already over."})
                 return
 
-            agent_type = str(payload.get("agentType", "random"))
+            agent_type = str(payload.get("agentType", "custom"))
             ai_mod = get_fresh_ai_module()
             chosen = ai_mod.choose_move(state.clone(), agent_type=agent_type)
 

@@ -29,15 +29,11 @@
     W: 'West Wall',
   };
 
-  // Mode controller descriptors: 'human' | 'random' | 'custom'
+  // Mode controller descriptors: 'human' | 'custom'
   const MODE_CONTROLLERS = {
     'p1-vs-custom': ['human', 'custom'],
-    'p1-vs-random': ['human', 'random'],
-    'custom-vs-p2': ['custom', 'human'],
-    'random-vs-p2': ['random', 'human'],
     pvp: ['human', 'human'],
-    'random-vs-random': ['random', 'random'],
-    'custom-vs-random': ['custom', 'random'],
+    'custom-vs-custom': ['custom', 'custom'],
   };
 
   // Application State
@@ -133,7 +129,6 @@
   function getPlayerLabel(idx) {
     const ctrl = getControllerType(idx);
     const roman = idx === 0 ? 'I' : 'II';
-    if (ctrl === 'random') return `Gladiator ${roman} (Random AI)`;
     if (ctrl === 'custom') return `Gladiator ${roman} (Custom AI)`;
     return `Gladiator ${roman}`;
   }

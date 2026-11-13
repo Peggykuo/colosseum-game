@@ -20,7 +20,6 @@ const PYTHON_FILES = [
   'world.py',
   'agents/__init__.py',
   'agents/agent.py',
-  'agents/random_agent.py',
   'agents/human_agent.py',
   'agents/student_agent.py',
   'engine.py',
@@ -44,7 +43,7 @@ def _colosseum_choose_move(payload_json: str) -> str:
     if state.game_over:
         raise ValueError("Game is already over.")
 
-    agent_type = str(payload.get("agentType", "random"))
+    agent_type = str(payload.get("agentType", "custom"))
     chosen = ai.choose_move(state.clone(), agent_type=agent_type)
 
     if isinstance(chosen, dict):

@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 class World:
     def __init__(
         self,
-        player_1="random_agent",
-        player_2="random_agent",
+        player_1="student_agent",
+        player_2="student_agent",
         board_size=None,
         display_ui=False,
         display_delay=2,
