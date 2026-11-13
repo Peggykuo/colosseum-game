@@ -20,6 +20,7 @@ const PYTHON_FILES = [
   'world.py',
   'agents/__init__.py',
   'agents/agent.py',
+  'agents/random_agent.py',
   'agents/human_agent.py',
   'agents/student_agent.py',
   'engine.py',
