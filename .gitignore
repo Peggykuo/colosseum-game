@@ -12,3 +12,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Local AI notes
+AI_IMPROVEMENTS.md
