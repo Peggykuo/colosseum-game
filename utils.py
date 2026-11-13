@@ -164,6 +164,19 @@ def ensure_numpy():
         def tolist(self):
             return self._deep_clone(self._data)
 
+        def tobytes(self):
+            out = bytearray()
+
+            def rec(node):
+                if isinstance(node, list):
+                    for x in node:
+                        rec(x)
+                else:
+                    out.append(int(bool(node)) if self.dtype is bool else (int(node) & 0xFF))
+
+            rec(self._data)
+            return bytes(out)
+
         def __repr__(self):
             return f"array({self._data!r})"
 

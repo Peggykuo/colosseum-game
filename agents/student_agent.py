@@ -31,6 +31,18 @@ class StudentAgent(Agent):
         }
         self.opposites = {0: 2, 1: 3, 2: 0, 3: 1}
         self.moves = ((-1, 0), (0, 1), (1, 0), (0, -1))
+        self.heuristic_memo = {}
+        self.distance_memo = {}
+        self.endgame_memo = {}
+
+    def get_board_key(self, chess_board):
+        """
+        Generates a hashable key for the current board wall state to support
+        board state memoization across move evaluations and forward checking.
+        """
+        if hasattr(chess_board, "tobytes"):
+            return chess_board.tobytes()
+        return str(chess_board.tolist() if hasattr(chess_board, "tolist") else chess_board)
 
     def get_possible_moves(self, my_pos, max_step, chess_board, adv_pos):
         '''
@@ -83,7 +95,7 @@ class StudentAgent(Agent):
 
         return allowed_moves
 
-    def distance_to_all_cells(self, my_pos, chess_board, adv_pos, me):
+    def distance_to_all_cells(self, my_pos, chess_board, adv_pos, me, board_key=None):
         '''
            A funtion that looks at current position and returns a 2D array of board_size*board_size representing
            the distance from the current position to that cell on the chessboard
@@ -91,6 +103,11 @@ class StudentAgent(Agent):
            Input: my_position, chess_board, max steps(int)
            Output: boardsize*boardsize list of ints where ints are minimum distances from current position
         '''
+        if board_key is None:
+            board_key = self.get_board_key(chess_board)
+        memo_key = (board_key, tuple(my_pos), tuple(adv_pos), me)
+        if memo_key in self.distance_memo:
+            return self.distance_memo[memo_key]
 
         # Initiate list of visited nodes
         seen = set()
@@ -143,20 +160,28 @@ class StudentAgent(Agent):
                     next_count += 1
                     seen.add(tmp_pos)
             counter -= 1
+        self.distance_memo[memo_key] = distances
         return distances
 
     def calc_heuristic(self, my_pos, chess_board, adv_pos):
         '''
         A function that calculates the heuristic as distance between my position and the rest of
         the board vs the opponent's distance and the rest of the board. Uses numpy for faster
-        computation.
+        computation and memoizes evaluated board states.
 
         Input: my position, chess_board (after making a move), opponent's position
         Output: heuristic (int) for this move
         '''
-        my_potential = self.distance_to_all_cells(my_pos, chess_board, adv_pos, True)
-        opp_potential = self.distance_to_all_cells(adv_pos, chess_board, my_pos, False)
-        return np.sum(my_potential - opp_potential)
+        board_key = self.get_board_key(chess_board)
+        memo_key = (board_key, tuple(my_pos), tuple(adv_pos))
+        if memo_key in self.heuristic_memo:
+            return self.heuristic_memo[memo_key]
+
+        my_potential = self.distance_to_all_cells(my_pos, chess_board, adv_pos, True, board_key=board_key)
+        opp_potential = self.distance_to_all_cells(adv_pos, chess_board, my_pos, False, board_key=board_key)
+        heuristic = np.sum(my_potential - opp_potential)
+        self.heuristic_memo[memo_key] = heuristic
+        return heuristic
 
     def set_barrier(self, r, c, dir, chess_board):
         '''Copied from world'''
@@ -179,6 +204,8 @@ class StudentAgent(Agent):
     def check_endgame(self, my_pos, chess_board, adv_pos):
         """
         Check if the game ends and compute the current score of the agents.
+        Memoizes Union-Find connected components by board wall state to avoid
+        redundant full-board traversals on equivalent wall configurations.
 
         Returns
         -------
@@ -189,41 +216,49 @@ class StudentAgent(Agent):
         player_1_score : int
             The score of player 1, student_agent's opponent.
         """
-        rows, cols = len(chess_board), len(chess_board[0])
-        
-        # Union-Find
-        father = dict()
-        for r in range(rows):
-            for c in range(cols):
-                father[(r, c)] = (r, c)
+        board_key = self.get_board_key(chess_board)
+        if board_key in self.endgame_memo:
+            father, comp_counts = self.endgame_memo[board_key]
+        else:
+            rows, cols = len(chess_board), len(chess_board[0])
 
-        def find(pos):
-            if father[pos] != pos:
-                father[pos] = find(father[pos])
-            return father[pos]
+            # Union-Find
+            father = dict()
+            for r in range(rows):
+                for c in range(cols):
+                    father[(r, c)] = (r, c)
 
-        def union(pos1, pos2):
-            father[pos1] = pos2
+            def find(pos):
+                if father[pos] != pos:
+                    father[pos] = find(father[pos])
+                return father[pos]
 
-        for r in range(rows):
-            for c in range(cols):
-                for dir, move in enumerate(
-                    self.moves[1:3]
-                ):  # Only check down and right
-                    if chess_board[r, c, dir + 1]:
-                        continue
-                    pos_a = find((r, c))
-                    pos_b = find((r + move[0], c + move[1]))
-                    if pos_a != pos_b:
-                        union(pos_a, pos_b)
+            def union(pos1, pos2):
+                father[pos1] = pos2
 
-        for r in range(rows):
-            for c in range(cols):
-                find((r, c))
-        p0_r = find(tuple(my_pos))
-        p1_r = find(tuple(adv_pos))
-        p0_score = list(father.values()).count(p0_r)
-        p1_score = list(father.values()).count(p1_r)
+            for r in range(rows):
+                for c in range(cols):
+                    for dir, move in enumerate(
+                        self.moves[1:3]
+                    ):  # Only check down and right
+                        if chess_board[r, c, dir + 1]:
+                            continue
+                        pos_a = find((r, c))
+                        pos_b = find((r + move[0], c + move[1]))
+                        if pos_a != pos_b:
+                            union(pos_a, pos_b)
+
+            comp_counts = dict()
+            for r in range(rows):
+                for c in range(cols):
+                    root = find((r, c))
+                    comp_counts[root] = comp_counts.get(root, 0) + 1
+            self.endgame_memo[board_key] = (father, comp_counts)
+
+        p0_r = father[tuple(my_pos)]
+        p1_r = father[tuple(adv_pos)]
+        p0_score = comp_counts[p0_r]
+        p1_score = comp_counts[p1_r]
         if p0_r == p1_r:
             return False, p0_score, p1_score
         player_win = None
